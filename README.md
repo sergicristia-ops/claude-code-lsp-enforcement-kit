@@ -351,7 +351,7 @@ Session starts
 
 **Hook type:** PreToolUse | **Matcher:** `Agent`
 
-A delegated subagent's tool access depends on how it's configured, and its own exploration doesn't share this session's LSP navigation history. Without pre-resolved context, a subagent easily falls back to exploratory Grep+Read, burning tokens and bypassing enforcement for its own turn. This hook forces the orchestrator to resolve symbol locations via `LSP` first and hand them to the subagent directly.
+Without `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (see [Prerequisites](#option-3-manual-setup)), a delegated `Agent` call can run as a background task where the `LSP` tool isn't available at all — that subagent has no way to satisfy this kit's enforcement and falls straight back to exploratory Grep+Read. Even with it set, a subagent's own exploration doesn't share this session's LSP navigation history. Either way, this hook forces the orchestrator to resolve symbol locations via `LSP` first and hand them to the subagent directly, rather than trusting the subagent to redo that work.
 
 ```
 // BLOCKED — no LSP context
@@ -491,6 +491,19 @@ Done. Restart Claude Code to activate.
 
 - Claude Code (CLI, Desktop, or IDE extension)
 - TypeScript/JavaScript project
+- The native `LSP` tool enabled and available to subagents — add to `~/.claude/settings.json` (or your project's):
+
+```json
+{
+  "env": {
+    "ENABLE_LSP_TOOL": "1",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  }
+}
+```
+
+  - **`ENABLE_LSP_TOOL`** turns on Claude Code's native `LSP` tool at all. Without it there's nothing for this kit's hooks to point Claude toward — every suggestion in this README assumes the tool exists.
+  - **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`** matters specifically for delegated subagents (the `lsp-pre-delegation.js` hook, below): Claude Code can run an `Agent` call as a background task, and the `LSP` tool isn't available inside that execution mode. A subagent spawned in the background has no `LSP` tool to call, so it falls straight back to Grep+Read with no way to satisfy this kit's enforcement at all. Setting this disables background-task execution so subagents run in the foreground instead, where `LSP` is actually available to them.
 
 #### Step 1: Copy files
 
