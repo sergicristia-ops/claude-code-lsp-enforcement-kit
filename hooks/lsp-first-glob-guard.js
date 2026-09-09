@@ -20,12 +20,12 @@
  *   - camelCase symbol:          *createOrder*, *handleSubmit*
  *   - snake_case function (3+):  *get_user_sessions*, *write_audit_log*
  *
- * Philosophy: if you know the symbol name, use LSP (find_workspace_symbols
- *   for cclsp, find_symbol for Serena). Glob is for broad file discovery
- *   by extension or concept, not for symbol-based search.
+ * Philosophy: if you know the symbol name, use the native LSP tool
+ *   (operation: workspaceSymbol). Glob is for broad file discovery by
+ *   extension or concept, not for symbol-based search.
  */
 
-const { buildSuggestion, buildStructuredBlockResponse } = require('./lib/detect-lsp-provider');
+const { buildSuggestion, buildStructuredBlockResponse, classifySymbolShape, REQUIRED_OPS_BY_SHAPE, isLspSatisfied } = require('./lib/lsp-suggestions');
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -41,6 +41,7 @@ process.stdin.on('end', () => {
   if (!pattern) process.exit(0);
 
   const searchPath = String(data.tool_input?.path ?? '').trim();
+  const transcriptPath = data.transcript_path || '';
 
   // ── Allow: non-code paths (anchored — bare substring would let
   //    "myknowledge-vaultxxx" bypass detection) ──────────────────────────
@@ -57,16 +58,33 @@ process.stdin.on('end', () => {
   const symbolTokens = tokens.filter(t => isCodeSymbol(t));
   if (symbolTokens.length === 0) process.exit(0);
 
-  const suggestions = symbolTokens.map(sym => {
-    const intent = /^[A-Z]/.test(sym) ? 'symbol_search' : 'references';
+  // Shape-based enforcement: a Glob pattern is filename-shaped, so it can
+  // never be declaration- or call-site-shaped in practice — but running it
+  // through the same classifier keeps this consistent with the other LSP
+  // gates and costs nothing. Only block symbols not already satisfied by
+  // a prior LSP call this session.
+  function intentForShape(shape, sym) {
+    if (shape === 'declaration') return 'definition';
+    if (shape === 'callsite') return 'callsite';
+    return /^[A-Z]/.test(sym) ? 'symbol_search' : 'references';
+  }
+
+  const unsatisfied = symbolTokens.filter(sym => {
+    const shape = classifySymbolShape(pattern, sym);
+    return !isLspSatisfied(transcriptPath, sym, REQUIRED_OPS_BY_SHAPE[shape]);
+  });
+  if (unsatisfied.length === 0) process.exit(0);
+
+  const suggestions = unsatisfied.map(sym => {
+    const intent = intentForShape(classifySymbolShape(pattern, sym), sym);
     return `  ${sym}:\n${buildSuggestion(sym, intent, '    ')}`;
   }).join('\n');
 
   const msg =
-    `\n⛔ LSP-FIRST BLOCK: Glob pattern contains ${symbolTokens.length} code symbol(s)\n` +
+    `\n⛔ LSP-FIRST BLOCK: Glob pattern contains ${unsatisfied.length} code symbol(s) needing LSP\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Pattern: ${pattern}\n` +
-    `Symbols: ${symbolTokens.join(', ')}\n\n` +
+    `Symbols: ${unsatisfied.join(', ')}\n\n` +
     `LSP is always connected. Searching files by symbol name is LSP territory:\n` +
     `${suggestions}\n\n` +
     `If you need to find files by extension or concept, use lowercase\n` +
@@ -75,12 +93,12 @@ process.stdin.on('end', () => {
 
   process.stderr.write(msg);
 
-  const intent = /^[A-Z]/.test(symbolTokens[0]) ? 'symbol_search' : 'references';
+  const intent = intentForShape(classifySymbolShape(pattern, unsatisfied[0]), unsatisfied[0]);
   console.log(JSON.stringify(buildStructuredBlockResponse({
     hook: 'lsp-first-glob-guard',
-    symbols: symbolTokens,
+    symbols: unsatisfied,
     intent,
-    reason: `LSP-FIRST: Glob pattern contains code symbol(s) [${symbolTokens.join(', ')}]. Use LSP tools instead of filename-based symbol search.`,
+    reason: `LSP-FIRST: Glob pattern contains code symbol(s) [${unsatisfied.join(', ')}]. Use LSP tools instead of filename-based symbol search.`,
   })));
 });
 

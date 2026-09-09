@@ -100,9 +100,10 @@ process.stdin.on('end', () => {
     reason: [
       `LSP PRE-DELEGATION: ${agentLabel} without "## LSP CONTEXT".`,
       '',
-      'DO THIS NOW (3 steps, then retry the Agent call):',
-      '1. mcp__cclsp__get_diagnostics("<any .ts file>")  — primes LSP',
-      '2. mcp__cclsp__find_workspace_symbols("<keyword from task>")  — finds symbols',
+      'DO THIS NOW (3 steps, then retry the Agent call), using the native LSP tool',
+      '(no MCP server involved):',
+      '1. LSP tool, operation "documentSymbol", on any project file  — primes LSP',
+      '2. LSP tool, operation "workspaceSymbol", query "<keyword from task>"  — finds symbols',
       '3. Add to EVERY agent prompt:',
       '   ## LSP CONTEXT (pre-resolved — do NOT re-search)',
       '   - symbolName: defined at file.ts:42, called from a.ts:15',
@@ -111,3 +112,4 @@ process.stdin.on('end', () => {
     ].join('\n'),
   }));
 });
+

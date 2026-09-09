@@ -32,6 +32,7 @@ echo
 # 1. Hook files installed
 EXPECTED_HOOKS=(
   bash-grep-block.js
+  bash-code-view-block.js
   lsp-first-guard.js
   lsp-first-glob-guard.js
   lsp-first-read-guard.js
@@ -44,10 +45,10 @@ for h in "${EXPECTED_HOOKS[@]}"; do
   if [ -f "$HOOKS_DIR/$h" ]; then installed=$((installed+1)); else missing+=("$h"); fi
 done
 helper_ok="no"
-if [ -f "$HOOKS_DIR/lib/detect-lsp-provider.js" ]; then helper_ok="yes"; fi
+if [ -f "$HOOKS_DIR/lib/lsp-suggestions.js" ]; then helper_ok="yes"; fi
 
-status="ok"; [ $installed -eq 7 ] || status="bad"
-printf '  Hook files:          %s %d/7 ' "$(check $status)" "$installed"
+status="ok"; [ $installed -eq 8 ] || status="bad"
+printf '  Hook files:          %s %d/8 ' "$(check $status)" "$installed"
 [ ${#missing[@]} -gt 0 ] && printf '%s(missing: %s)%s' "$DIM" "${missing[*]}" "$NC"
 echo
 printf '  Shared lib/helper:   %s %s\n' "$(check $([ "$helper_ok" = "yes" ] && echo ok || echo bad))" "$helper_ok"
@@ -68,15 +69,16 @@ eval "$(node -e "
   console.log('PRE_GREP=' + count(pre, 'lsp-first-guard.js'));
   console.log('PRE_GLOB=' + count(pre, 'lsp-first-glob-guard.js'));
   console.log('PRE_BASH=' + count(pre, 'bash-grep-block.js'));
+  console.log('PRE_BASH_VIEW=' + count(pre, 'bash-code-view-block.js'));
   console.log('PRE_READ=' + count(pre, 'lsp-first-read-guard.js'));
   console.log('PRE_AGENT=' + count(pre, 'lsp-pre-delegation.js'));
   console.log('POST_TRACKER=' + count(post, 'lsp-usage-tracker.js'));
   console.log('SESSION_RESET=' + count(start, 'lsp-session-reset.js'));
-" 2>/dev/null || echo 'PRE_GREP=0 PRE_GLOB=0 PRE_BASH=0 PRE_READ=0 PRE_AGENT=0 POST_TRACKER=0 SESSION_RESET=0')"
+" 2>/dev/null || echo 'PRE_GREP=0 PRE_GLOB=0 PRE_BASH=0 PRE_BASH_VIEW=0 PRE_READ=0 PRE_AGENT=0 POST_TRACKER=0 SESSION_RESET=0')"
 
-total_pre=$((PRE_GREP + PRE_GLOB + PRE_BASH + PRE_READ + PRE_AGENT))
+total_pre=$((PRE_GREP + PRE_GLOB + PRE_BASH + PRE_BASH_VIEW + PRE_READ + PRE_AGENT))
 registered_all=0
-[ $PRE_GREP -ge 1 ] && [ $PRE_GLOB -ge 1 ] && [ $PRE_BASH -ge 1 ] && \
+[ $PRE_GREP -ge 1 ] && [ $PRE_GLOB -ge 1 ] && [ $PRE_BASH -ge 1 ] && [ $PRE_BASH_VIEW -ge 1 ] && \
   [ $PRE_READ -ge 1 ] && [ $PRE_AGENT -ge 1 ] && \
   [ $POST_TRACKER -ge 1 ] && [ $SESSION_RESET -ge 1 ] && registered_all=1
 
@@ -84,22 +86,7 @@ printf '  Settings registered: %s PreToolUse(%d) PostToolUse(%d) SessionStart(%d
   "$(check $([ $registered_all -eq 1 ] && echo ok || echo bad))" \
   "$total_pre" "$POST_TRACKER" "$SESSION_RESET"
 
-# 3. Detected LSP providers via the helper (if present)
-if [ -f "$HOOKS_DIR/lib/detect-lsp-provider.js" ]; then
-  providers=$(node -e "
-    try {
-      const lib = require('$HOOKS_DIR/lib/detect-lsp-provider.js');
-      const p = lib.detectProviders();
-      console.log(p.length ? p.join(', ') : '(none detected)');
-    } catch (e) { console.log('(helper error)'); }
-  " 2>/dev/null)
-  provider_status="ok"; [ "$providers" = "(none detected)" ] && provider_status="warn"
-  icon=$(check $provider_status)
-  [ "$provider_status" = "warn" ] && icon="${YELLOW}!${NC}"
-  printf '  Detected providers:  %s %s\n' "$icon" "$providers"
-fi
-
-# 4. Current cwd state file
+# 3. Current cwd state file
 CWD_HASH=$(node -e "console.log(require('crypto').createHash('md5').update(process.cwd()).digest('hex').slice(0,12))" 2>/dev/null || echo "")
 FLAG="$STATE_DIR/lsp-ready-$CWD_HASH"
 
@@ -142,7 +129,7 @@ fi
 echo
 echo "${BOLD}Diagnostic summary${NC}"
 echo "------------------"
-[ $installed -eq 7 ] && [ $registered_all -eq 1 ] && [ "$helper_ok" = "yes" ] && {
+[ $installed -eq 8 ] && [ $registered_all -eq 1 ] && [ "$helper_ok" = "yes" ] && {
   echo "  ${GREEN}All checks passed.${NC} Enforcement is active. Try Grep(\"SomeSymbol\") to verify blocking."
   exit 0
 }

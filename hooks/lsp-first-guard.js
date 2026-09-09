@@ -2,9 +2,10 @@
 'use strict';
 
 // lsp-first-guard.js — PreToolUse hook (matcher: Grep)
-// Blocks Grep on code symbols. Suggests LSP equivalent for the active provider.
+// Blocks Grep on code symbols. Always suggests Claude Code's native LSP
+// tool (no MCP server involved).
 
-const { buildSuggestion, buildStructuredBlockResponse } = require('./lib/detect-lsp-provider');
+const { buildSuggestion, buildStructuredBlockResponse, classifySymbolShape, REQUIRED_OPS_BY_SHAPE, isLspSatisfied, findDeclarationOrCallsite } = require('./lib/lsp-suggestions');
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -21,6 +22,7 @@ process.stdin.on('end', () => {
   const pattern = String(params.pattern ?? '').trim();
   const searchPath = String(params.path ?? '');
   const glob    = String(params.glob ?? '');
+  const transcriptPath = data.transcript_path || '';
 
   if (/knowledge-vault|\.task[\\/]|\.claude[\\/]|node_modules|logs?[\\/]|docs?[\\/]|supabase[\\/]migrations/i.test(searchPath)) {
     process.exit(0);
@@ -38,26 +40,49 @@ process.stdin.on('end', () => {
     if (isCodeSymbol(part)) symbolParts.push(part);
   }
 
+  // Whole-string pre-check: catches multi-word declaration forms (e.g.
+  // "func handleSubmit", "type UserService struct") that the `|`-split
+  // token extraction above can't see, since isCodeSymbol() rejects any
+  // token containing whitespace.
+  const declOrCall = findDeclarationOrCallsite(pattern, isCodeSymbol);
+  if (declOrCall && !symbolParts.includes(declOrCall.identifier)) {
+    symbolParts.push(declOrCall.identifier);
+  }
+
   if (symbolParts.length === 0) process.exit(0);
 
-  const suggestions = symbolParts.map(sym => {
-    const intent = /^[A-Z]/.test(sym) ? 'symbol_search' : 'references';
+  function intentForShape(shape, sym) {
+    if (shape === 'declaration') return 'definition';
+    if (shape === 'callsite') return 'callsite';
+    return /^[A-Z]/.test(sym) ? 'symbol_search' : 'references';
+  }
+
+  // Shape-based enforcement: only block symbols not already satisfied by
+  // a prior LSP call this session.
+  const unsatisfied = symbolParts.filter(sym => {
+    const shape = classifySymbolShape(pattern, sym);
+    return !isLspSatisfied(transcriptPath, sym, REQUIRED_OPS_BY_SHAPE[shape]);
+  });
+  if (unsatisfied.length === 0) process.exit(0);
+
+  const suggestions = unsatisfied.map(sym => {
+    const intent = intentForShape(classifySymbolShape(pattern, sym), sym);
     return `  ${sym}:\n${buildSuggestion(sym, intent, '    ')}`;
   }).join('\n');
 
   process.stderr.write(
-    `\n⛔ LSP-FIRST BLOCK: ${symbolParts.length} code symbol(s) in Grep — use LSP instead\n` +
-    `Symbols: ${symbolParts.join(', ')}\nLSP tools:\n${suggestions}\n\n`
+    `\n⛔ LSP-FIRST BLOCK: ${unsatisfied.length} code symbol(s) in Grep needing LSP\n` +
+    `Symbols: ${unsatisfied.join(', ')}\nLSP tools:\n${suggestions}\n\n`
   );
 
   // Emit structured JSON for programmatic consumers (monitoring, dashboards, IDE plugins).
   // `decision` and `reason` fields remain backward compatible.
-  const intent = /^[A-Z]/.test(symbolParts[0]) ? 'symbol_search' : 'references';
+  const intent = intentForShape(classifySymbolShape(pattern, unsatisfied[0]), unsatisfied[0]);
   console.log(JSON.stringify(buildStructuredBlockResponse({
     hook: 'lsp-first-guard',
-    symbols: symbolParts,
+    symbols: unsatisfied,
     intent,
-    reason: `LSP-FIRST: Pattern contains code symbol(s) [${symbolParts.join(', ')}]. Use LSP tools:\n${suggestions}`,
+    reason: `LSP-FIRST: Pattern contains code symbol(s) [${unsatisfied.join(', ')}]. Use LSP tools:\n${suggestions}`,
   })));
 });
 
