@@ -308,6 +308,8 @@ A different gap: a Bash command can view a code file's content — a line range 
 
 This hook doesn't reimplement that gate — it blocks and redirects: use `Read` instead, which is already gated. `git diff` / `git log -p` / `git show <ref>` (no colon) stay exempt — those show a diff or commit history, not the file's current full content.
 
+**Known gotcha, fixed:** the `isBareCat` check originally matched `cat <<'EOF'` (a heredoc — a *string-building* idiom, e.g. `git commit -m "$(cat <<'EOF' ... EOF)"`) the same as `cat somefile.go` (an actual file view). It self-triggered on exactly that pattern the first time this kit's own maintainer committed with a heredoc-built message that happened to mention a `.js` filename in plain text — the hook was reading its *own commit message* as a code-file view. Fixed by requiring `cat`'s argument not start with `<<`: `/\bcat\s+(?!<<)\S/`. If you hit a similar false positive with another command shape, that's the kind of bug to look for — this hook does a best-effort text scan, not a real shell parse, so it can't distinguish "this looks like a code path" from "this text happens to contain something that looks like a code path."
+
 ### 5. `lsp-first-read-guard.js` — Progressive Read Gate
 
 **Hook type:** PreToolUse | **Matcher:** `Read`

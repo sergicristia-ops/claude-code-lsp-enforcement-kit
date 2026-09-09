@@ -85,8 +85,12 @@ process.stdin.on('end', () => {
   // regex-address awk detection ('/pattern/,/pattern/').
   const isAwkNR = /\bawk\b/i.test(cmd) && /\bNR\b/.test(cmd);
   // Bare cat on a code file — excluded when grep/rg/ag/ack is also
-  // present, since bash-grep-block.js already handles that shape.
-  const isBareCat = /\bcat\s+\S/.test(cmd) && !hasGrepToken && !/\bgit\s+show\b/.test(cmd);
+  // present (bash-grep-block.js already handles that shape), and when
+  // cat's argument is a heredoc redirect (`cat <<'EOF'`) rather than a
+  // file: that's a string-building idiom (e.g. this repo's own git-commit
+  // instructions), not a file view, even if the heredoc body happens to
+  // mention a filename with a code extension as plain text.
+  const isBareCat = /\bcat\s+(?!<<)\S/.test(cmd) && !hasGrepToken && !/\bgit\s+show\b/.test(cmd);
 
   const isView = isGitShowColon || isSedRange || isAwkNR || isBareCat;
   if (!isView) process.exit(0);
@@ -103,3 +107,4 @@ process.stdin.on('end', () => {
     hook: 'bash-code-view-block',
   }));
 });
+
