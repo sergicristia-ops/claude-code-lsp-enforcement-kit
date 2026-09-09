@@ -79,6 +79,26 @@ No generic advice, no MCP server to install — every suggestion points at Claud
 
 ## ⚡ Quick Start
 
+**1. Have a language server for your language.** For TypeScript/JavaScript that's `typescript` itself (`tsserver` ships with it) — `npm install typescript` in the project, or have it available globally. For other languages, see [Other Languages](#-other-languages-python-go-rust) below (`gopls` for Go, `pylsp`/`pyright` for Python, `rust-analyzer` for Rust, …).
+
+**2. Enable the plugin that wires that server into Claude Code's native LSP client.** For TS/JS this is the `typescript-lsp@claude-plugins-official` plugin — step 4 below (`install.sh`) enables it for you. For another language, follow Claude Code's own docs for configuring a language server; this kit doesn't change based on which one is active.
+
+**3. Set the two env vars this kit's enforcement depends on**, in `~/.claude/settings.json` (or your project's) — `install.sh` does **not** set these for you, add them yourself:
+
+```json
+{
+  "env": {
+    "ENABLE_LSP_TOOL": "1",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  }
+}
+```
+
+- **`ENABLE_LSP_TOOL`** turns on Claude Code's native `LSP` tool at all. Without it there's nothing for this kit's hooks to point Claude toward — every suggestion in this README assumes the tool exists.
+- **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`** is what gives *delegated subagents* LSP access. Claude Code can run an `Agent` call as a background task, and the `LSP` tool isn't available inside that execution mode — a subagent with no `LSP` tool to call falls straight back to Grep+Read, with no way to satisfy this kit's enforcement (see `lsp-pre-delegation.js` below). Setting this forces subagents to run in the foreground instead, where `LSP` is actually reachable.
+
+**4. Install the hooks:**
+
 ```bash
 git clone https://github.com/nesaminua/claude-code-lsp-enforcement-kit.git
 cd claude-code-lsp-enforcement-kit
@@ -86,7 +106,7 @@ bash install.sh
 # Windows: pwsh ./install.ps1
 ```
 
-Restart Claude Code. Done. The installer is idempotent — safe to re-run on upgrades.
+**5. Restart Claude Code.** Done. The installer is idempotent — safe to re-run on upgrades.
 
 Verify:
 
@@ -351,7 +371,7 @@ Session starts
 
 **Hook type:** PreToolUse | **Matcher:** `Agent`
 
-Without `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (see [Prerequisites](#option-3-manual-setup)), a delegated `Agent` call can run as a background task where the `LSP` tool isn't available at all — that subagent has no way to satisfy this kit's enforcement and falls straight back to exploratory Grep+Read. Even with it set, a subagent's own exploration doesn't share this session's LSP navigation history. Either way, this hook forces the orchestrator to resolve symbol locations via `LSP` first and hand them to the subagent directly, rather than trusting the subagent to redo that work.
+Without `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (see [Quick Start](#-quick-start), step 3), a delegated `Agent` call can run as a background task where the `LSP` tool isn't available at all — that subagent has no way to satisfy this kit's enforcement and falls straight back to exploratory Grep+Read. Even with it set, a subagent's own exploration doesn't share this session's LSP navigation history. Either way, this hook forces the orchestrator to resolve symbol locations via `LSP` first and hand them to the subagent directly, rather than trusting the subagent to redo that work.
 
 ```
 // BLOCKED — no LSP context
@@ -490,20 +510,9 @@ Done. Restart Claude Code to activate.
 #### Prerequisites
 
 - Claude Code (CLI, Desktop, or IDE extension)
-- TypeScript/JavaScript project
-- The native `LSP` tool enabled and available to subagents — add to `~/.claude/settings.json` (or your project's):
+- Steps 1-3 from [Quick Start](#-quick-start) above already done: a language server available for your language, the plugin enabling it, and the two `env` vars (`ENABLE_LSP_TOOL`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`) set in `~/.claude/settings.json`
 
-```json
-{
-  "env": {
-    "ENABLE_LSP_TOOL": "1",
-    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
-  }
-}
-```
-
-  - **`ENABLE_LSP_TOOL`** turns on Claude Code's native `LSP` tool at all. Without it there's nothing for this kit's hooks to point Claude toward — every suggestion in this README assumes the tool exists.
-  - **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`** matters specifically for delegated subagents (the `lsp-pre-delegation.js` hook, below): Claude Code can run an `Agent` call as a background task, and the `LSP` tool isn't available inside that execution mode. A subagent spawned in the background has no `LSP` tool to call, so it falls straight back to Grep+Read with no way to satisfy this kit's enforcement at all. Setting this disables background-task execution so subagents run in the foreground instead, where `LSP` is actually available to them.
+The steps below are the manual equivalent of Quick Start's step 4 (`install.sh`) — copying files and registering hooks by hand instead of running the script.
 
 #### Step 1: Copy files
 
