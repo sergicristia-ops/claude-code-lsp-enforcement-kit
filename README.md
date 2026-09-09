@@ -17,7 +17,7 @@
   <a href="#-quick-start">Quick Start</a> &bull;
   <a href="#-the-problem">Why</a> &bull;
   <a href="#-token-savings-grep-vs-lsp-per-operation">Savings</a> &bull;
-  <a href="#-architecture-6-hooks--1-tracker">Architecture</a> &bull;
+  <a href="#-architecture-7-hooks--1-tracker">Architecture</a> &bull;
   <a href="#-how-each-hook-works">Hooks</a> &bull;
   <a href="CHANGELOG.md">Changelog</a>
 </p>
@@ -30,18 +30,26 @@
 
 ## In Action
 
-When Claude tries to `Grep` for a code symbol, the hook blocks with a copy-pasteable LSP command:
+When Claude tries to `Grep` for a code symbol, the hook blocks and names the exact `LSP` operation the shape of that pattern calls for:
 
 ```
-⛔ LSP-FIRST BLOCK: Pattern contains code symbol(s) — use LSP instead
+⛔ LSP-FIRST BLOCK: 2 code symbol(s) in Grep needing LSP
 Symbols: handleSubmit, UserService
-
 LSP tools:
   handleSubmit:
-    mcp__cclsp__find_references("handleSubmit")  (cclsp)
+    LSP tool — operation: findReferences (for "handleSubmit")
 
   UserService:
-    mcp__cclsp__find_workspace_symbols("UserService")  (cclsp)
+    LSP tool — operation: workspaceSymbol (for "UserService")
+```
+
+A declaration- or call-site-shaped pattern gets an even more specific answer — `grep "func handleSubmit"` and `grep "handleSubmit("` don't get the same suggestion:
+
+```
+⛔ LSP-FIRST: Blocked — found 1 code symbol(s) needing LSP: handleSubmit
+LSP is always connected (native tool — no MCP server needed). Use:
+  handleSubmit:
+    LSP tool — operation: goToDefinition or documentSymbol (for "handleSubmit")
 ```
 
 When Claude tries to `Read` a code file without warming up LSP, the progressive gate blocks:
@@ -49,16 +57,23 @@ When Claude tries to `Read` a code file without warming up LSP, the progressive 
 ```
 🛡️  LSP-FIRST READ GATE — Gate 1: warmup required
 
-  Call one of these first:
-    mcp__cclsp__get_diagnostics("src/page.tsx")  (cclsp)
+  Preferred: LSP tool, operation "documentSymbol", on any project file.
+    → lists the file's symbols and counts as warmup (position is ignored by this operation).
 
   CONCRETE CALL FOR THIS FILE (works in any project):
-    mcp__cclsp__get_diagnostics("src/page.tsx")
+    LSP tool: operation "documentSymbol", filePath "src/page.tsx", line 1, character 1
 
   After warmup: 2 free Reads, then need LSP navigation.
 ```
 
-No generic advice. Every block message is parametrized by the actual file Claude tried to touch.
+And when Claude tries to route around both of those with `sed`/`awk`/`cat`/`git show` instead of `Read`:
+
+```
+⛔ LSP-FIRST: Blocked — this Bash command views code-file content (src/page.tsx) the same way Read would, but bypasses its gate.
+Use the Read tool instead — it's gated identically (free reads, then LSP navigation required).
+```
+
+No generic advice, no MCP server to install — every suggestion points at Claude Code's own built-in `LSP` tool, parametrized by the actual symbol or file Claude tried to touch.
 
 ---
 
@@ -97,7 +112,7 @@ Grep approach:
   Total: ~9,000 tokens, 4 tool calls
 
 LSP approach:
-  find_definition("handleSubmit") → form-actions.ts:42, ~80 tokens
+  LSP goToDefinition on handleSubmit → form-actions.ts:42, ~80 tokens
   Read form-actions.ts:35-55 → ~150 tokens
   ─────────────────────────────────────
   Total: ~230 tokens, 2 tool calls
@@ -111,11 +126,11 @@ A rule in CLAUDE.md saying "use LSP" helps ~60% of the time. Hooks make it 100%.
 
 | Task | Grep approach | LSP approach | Saved |
 |------|--------------|--------------|-------|
-| Find definition of `handleSubmit` | Grep → 23 matches (~1500 tok) + 2 wrong Reads (~5000 tok) = **~6500 tok** | `find_definition` → file:line (~80 tok) + 1 targeted Read (~500 tok) = **~580 tok** | **91%** |
-| Find all usages of `UserService` | Grep → 15 matches (~1200 tok), scan results (~300 tok) = **~1500 tok** | `find_references` → 8 file:line pairs (~150 tok) = **~150 tok** | **90%** |
-| Check type of `formData` | Read full file (~2500 tok), search visually = **~2500 tok** | `get_hover` → type signature (~60 tok) = **~60 tok** | **98%** |
-| Find component `InviteForm` | Glob (~200 tok) + Grep (~800 tok) + Read wrong file (~2500 tok) = **~3500 tok** | `find_workspace_symbols` → exact location (~100 tok) = **~100 tok** | **97%** |
-| Who calls `validateToken`? | Grep → noisy results (~1500 tok) + 3 Reads to verify (~6000 tok) = **~7500 tok** | `get_incoming_calls` → caller list (~200 tok) + 1 Read (~500 tok) = **~700 tok** | **91%** |
+| Find definition of `handleSubmit` | Grep → 23 matches (~1500 tok) + 2 wrong Reads (~5000 tok) = **~6500 tok** | `goToDefinition` → file:line (~80 tok) + 1 targeted Read (~500 tok) = **~580 tok** | **91%** |
+| Find all usages of `UserService` | Grep → 15 matches (~1200 tok), scan results (~300 tok) = **~1500 tok** | `findReferences` → 8 file:line pairs (~150 tok) = **~150 tok** | **90%** |
+| Check type of `formData` | Read full file (~2500 tok), search visually = **~2500 tok** | `hover` → type signature (~60 tok) = **~60 tok** | **98%** |
+| Find component `InviteForm` | Glob (~200 tok) + Grep (~800 tok) + Read wrong file (~2500 tok) = **~3500 tok** | `workspaceSymbol` → exact location (~100 tok) = **~100 tok** | **97%** |
+| Who calls `validateToken`? | Grep → noisy results (~1500 tok) + 3 Reads to verify (~6000 tok) = **~7500 tok** | `prepareCallHierarchy` + `incomingCalls` → caller list (~200 tok) + 1 Read (~500 tok) = **~700 tok** | **91%** |
 
 ## 📊 Real-World Data: 1 Week, 2 Projects
 
@@ -136,41 +151,45 @@ Aggregate from a week of development across 2 TypeScript projects:
 - Without LSP: ~120 Greps + ~180 Reads = ~315k tokens for the same navigation work
 - With LSP: 39 nav calls + 53 targeted Reads = ~84k tokens
 
-## 🔌 Works with any LSP MCP server
+## 🔌 Native LSP only — no MCP server, ever
 
-v2.1 introduces **provider-aware block messages**. The kit detects which LSP MCP server(s) you have installed and tailors its suggestions accordingly:
+Every suggestion this kit makes points at Claude Code's **built-in `LSP` tool** — the one exposed natively by the harness (`operation`: `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`). There is nothing to install, connect, or detect: it's either wired up for the file's language or the call errors out, same as any other tool.
 
-- [**cclsp**](https://github.com/ktnyt/cclsp) — standalone MCP server or bundled via the `typescript-lsp` Claude Code plugin. Suggestions use `mcp__cclsp__find_definition`, `find_references`, `find_workspace_symbols`, etc.
-- [**Serena**](https://github.com/oraios/serena) — high-level symbol MCP server (MIT, by Oraios AI). Multi-language support (Python, Go, Rust, Java, TypeScript, Vue, and more via its bundled `solidlsp` wrapper). Suggestions use `mcp__serena__find_symbol`, `find_referencing_symbols`, `get_symbols_overview`.
-- **Both installed** — suggestions show entries for both providers.
-- **Neither installed** — generic fallback with install hints for both.
+Earlier versions of this kit suggested MCP LSP servers (cclsp, Serena) instead, with provider-detection logic to pick between them. That's gone as of this version — no MCP server is ever suggested, and none is required. `hooks/lib/lsp-suggestions.js` has no provider registry to configure; it just maps a navigation intent (or a detected declaration/call-site/bare symbol shape) straight to the matching native operation.
 
-Detection reads user-level Claude Code config (`~/.claude.json`, `~/.claude/settings.json`) and matches known server names. The shared helper is in `hooks/lib/detect-lsp-provider.js` — adding a new provider means adding one entry to its `PROVIDERS` registry, with no changes to the individual hooks.
+Language support is whatever Claude Code itself has a language server wired up for (TypeScript/JavaScript out of the box via the `typescript-lsp` plugin this kit enables — see [Installation](#-installation)). Consult Claude Code's own docs for adding a language server for another language; this kit doesn't change based on which one is active.
 
-## 🏗️ Architecture: 6 Hooks + 1 Tracker
+## 🏗️ Architecture: 7 Hooks + 1 Tracker
 
 ```
                     PreToolUse                          PostToolUse
                     ──────────                          ───────────
 
  Grep call ──→ [lsp-first-guard.js] ──→ BLOCK
-                  detects code symbols,
-                  suggests LSP equivalent
+                  detects code symbols (incl. multi-word
+                  declaration/call-site shapes), suggests
+                  the exact LSP operation for that shape
 
  Glob call ──→ [lsp-first-glob-guard.js] ──→ BLOCK
                   blocks *UserService*, **/handleFoo*.ts;
                   allows *.ts, *subdomain*, src/**
 
  Bash(grep) ──→ [bash-grep-block.js] ──→ BLOCK
-                  catches grep/rg/ag/ack
-                  in shell commands
+                  catches grep/rg/ag/ack, plus
+                  regex-address sed -n / awk (symbol hunts)
+
+ Bash(sed/cat) → [bash-code-view-block.js] ──→ BLOCK
+                  catches sed -n 'N,Mp' / awk NR-print /
+                  bare cat / git show <ref>:<path> — viewing
+                  a code file without going through Read
+                  (git diff / git log -p stay exempt)
 
  Read(.tsx) ──→ [lsp-first-read-guard.js] ──→ GATE
                   5 progressive gates
                   (warmup → orient → nav → surgical)
 
  Agent(impl) ─→ [lsp-pre-delegation.js] ──→ BLOCK
-                  subagents can't access MCP,
+                  subagents get no LSP tool access,
                   orchestrator must pre-resolve
 
  LSP call ─────────────────────────────────────→ [lsp-usage-tracker.js]
@@ -185,14 +204,17 @@ Detection reads user-level Claude Code config (`~/.claude.json`, `~/.claude/sett
                     forces fresh warmup + re-enforces gates
 ```
 
-> **v2 note:** versions before v2 had two silent bypass routes that let
-> Claude read code files without ever calling LSP:
-> (1) `Glob("*SymbolName*")` had no guard, and (2) `nav_count` persisted
-> for 24 h across sessions, so a new session inherited "surgical mode"
-> (unlimited reads) from yesterday's LSP work. Both are closed in v2 by
-> `lsp-first-glob-guard.js` and `lsp-session-reset.js`. If you installed
-> v1, re-run `bash install.sh` — it merges the new hooks without touching
-> your existing settings.
+> **Note:** this kit's suggestions and enforcement are native-LSP-only —
+> no MCP server (cclsp, Serena, or otherwise) is ever suggested or
+> required (see "Native LSP only" above). It also closes two structural
+> gaps documented against real
+> bypass sessions: (1) a symbol-shaped `sed -n`/`awk` pattern used the
+> same way `grep` would be, and (2) `sed`/`awk`/`cat`/`git show` used to
+> view a code file's content in place of `Read`, both invisible to
+> earlier versions since neither ever contained `grep`/`rg`/`ag`/`ack`.
+> If you're upgrading, re-run `bash install.sh` — it's idempotent and
+> also migrates the `PostToolUse` tracker matcher in place if it still
+> targets the old `mcp__cclsp__*` tool names.
 
 ## 🔧 How Each Hook Works
 
@@ -200,12 +222,14 @@ Detection reads user-level Claude Code config (`~/.claude.json`, `~/.claude/sett
 
 **Hook type:** PreToolUse | **Matcher:** `Grep`
 
-Intercepts every Grep call. Detects code symbols in the pattern. Blocks with a suggestion to use the correct LSP tool.
+Intercepts every Grep call. Detects code symbols in the pattern — including multi-word declaration (`func handleSubmit`, `type UserService struct`) and call-site (`handleSubmit(`) shapes that a plain single-token extractor would miss — and blocks with the exact `LSP` operation that shape calls for. If a prior `LSP` call this session already satisfies the symbol (checked against the transcript), the call is let through instead of blocked again.
 
 | Pattern | Detected as | Action |
 |---------|------------|--------|
-| `getUserById` | camelCase symbol | BLOCK |
-| `UserService` | PascalCase symbol | BLOCK |
+| `getUserById` | camelCase symbol (bare) | BLOCK — `goToDefinition`/`findReferences`/`goToImplementation`/`workspaceSymbol` |
+| `UserService` | PascalCase symbol (bare) | BLOCK — same as above |
+| `func handleSubmit` / `type UserService struct` | declaration-shaped | BLOCK — `goToDefinition` or `documentSymbol` |
+| `handleSubmit(` | call-site-shaped | BLOCK — `prepareCallHierarchy` then `incomingCalls` |
 | `router.refresh` | dotted symbol | BLOCK |
 | `write_audit_log` | snake_case function | BLOCK |
 | `create-folder-modal` | component filename | BLOCK |
@@ -215,16 +239,14 @@ Intercepts every Grep call. Detects code symbols in the pattern. Blocks with a s
 | `*.md`, `*.json`, `*.sql` | non-code file glob | allow |
 | `.task/`, `node_modules/` | non-code path | allow |
 
-**Block message example** (with both cclsp and Serena detected):
+**Block message example:**
 ```
-⛔ LSP-FIRST BLOCK: 1 code symbol(s) in Grep — use LSP instead
+⛔ LSP-FIRST BLOCK: 1 code symbol(s) in Grep needing LSP
 Symbols: handleSubmit
 LSP tools:
   handleSubmit:
-    mcp__cclsp__find_references("handleSubmit")  (cclsp)
-    mcp__serena__find_referencing_symbols("handleSubmit")  (Serena)
+    LSP tool — operation: findReferences (for "handleSubmit")
 ```
-If only one provider is installed, only that suggestion appears.
 
 ### 2. `lsp-first-glob-guard.js` — Glob Symbol Blocker
 
@@ -248,17 +270,25 @@ The guard parses the glob pattern, extracts alphabetic tokens, and blocks if any
 | `tsconfig.json`, `next.config.ts` | framework config | allow |
 | `README.md` | docs | allow |
 
-**Allowed by design:** lowercase concept searches (`*auth*`, `*subdomain*`) are legitimate file discovery by topic. Only symbol-shaped tokens (casing patterns) are blocked, because those should use `find_workspace_symbols` instead.
+**Allowed by design:** lowercase concept searches (`*auth*`, `*subdomain*`) are legitimate file discovery by topic. Only symbol-shaped tokens (casing patterns) are blocked, because those should use the `LSP` tool's `workspaceSymbol` operation instead.
 
-### 3. `bash-grep-block.js` — Shell Grep Blocker
+### 3. `bash-grep-block.js` — Shell Grep & Symbol-Hunt Blocker
 
 **Hook type:** PreToolUse | **Matcher:** `Bash`
 
-Same detection logic, but for `Bash(grep "UserService" src/)`, `Bash(rg handleSubmit)`, etc. Claude sometimes tries to bypass the Grep hook by shelling out.
+Same detection logic as the Grep hook, but for `Bash(grep "UserService" src/)`, `Bash(rg handleSubmit)`, etc. — Claude sometimes tries to bypass the Grep hook by shelling out. Also catches `sed -n '/regex/,/regex/p'` and `awk '/regex/,/regex/'` used the same way (regex-*address* sed/awk, hunting a declaration or call-site) — a real bypass pattern seen in practice, since neither command contains `grep`/`rg`/`ag`/`ack`.
 
-Allows: `git grep` (history search), non-code paths, non-code file type filters.
+Allows: `git grep` (history search), non-code paths, non-code file type filters, and anything already satisfied by a prior `LSP` call this session.
 
-### 4. `lsp-first-read-guard.js` — Progressive Read Gate
+### 4. `bash-code-view-block.js` — Bash Code-Viewing Blocker
+
+**Hook type:** PreToolUse | **Matcher:** `Bash`
+
+A different gap: a Bash command can view a code file's content — a line range or the whole thing — without ever containing a symbol pattern at all, so it's invisible to the hook above too. `sed -n '10,30p' file.go`, `awk '{print NR": "$0}' file.go`, bare `cat file.go`, and `git show <ref>:<path>` (colon form — fetches the full file at that ref) are functionally identical to a `Read` call, but bypass `lsp-first-read-guard.js`'s free-read/nav-count gate entirely since that hook only fires on `tool_name === 'Read'`.
+
+This hook doesn't reimplement that gate — it blocks and redirects: use `Read` instead, which is already gated. `git diff` / `git log -p` / `git show <ref>` (no colon) stay exempt — those show a diff or commit history, not the file's current full content.
+
+### 5. `lsp-first-read-guard.js` — Progressive Read Gate
 
 **Hook type:** PreToolUse | **Matcher:** `Read`
 
@@ -267,7 +297,7 @@ The most sophisticated hook. Forces a "navigate first, read targeted" workflow t
 ```
 Gate 1 — Warmup Required
   No LSP state file → BLOCK
-  Must call get_diagnostics(<any .ts file>) first
+  Must call LSP documentSymbol(<any project file>) first
 
 Gate 2 — Free Orientation (reads 1-2)
   ALLOW — explore freely, no restrictions
@@ -291,20 +321,20 @@ Session starts
   │
   ├─ Read(page.tsx) → Gate 1 BLOCKS → "warmup required"
   │
-  ├─ get_diagnostics(file.ts) → tracker writes warmup_done=true
+  ├─ LSP documentSymbol(file.ts) → tracker writes warmup_done=true
   │
   ├─ Read(page.tsx) → Gate 2 allows (1 of 2 free)
   ├─ Read(actions.ts) → Gate 2 allows (2 of 2 free)
   ├─ Read(types.ts) → Gate 3 WARNS
   ├─ Read(helpers.ts) → Gate 4 BLOCKS
   │
-  ├─ find_workspace_symbols("MyFunc") → tracker: nav_count=1
+  ├─ LSP workspaceSymbol("MyFunc") → tracker: nav_count=1
   │
   ├─ Read(helpers.ts) → unlocked (reads 4-5)
   ├─ Read(utils.ts) → unlocked
   ├─ Read(service.ts) → Gate 5 BLOCKS
   │
-  ├─ find_references("MyFunc") → tracker: nav_count=2
+  ├─ LSP findReferences("MyFunc") → tracker: nav_count=2
   │
   └─ SURGICAL MODE — all Reads unlimited
 ```
@@ -317,11 +347,11 @@ Session starts
 
 **Dedup:** Reading the same file at different line ranges counts as 1 Read.
 
-### 5. `lsp-pre-delegation.js` — Agent Pre-Resolution
+### 6. `lsp-pre-delegation.js` — Agent Pre-Resolution
 
 **Hook type:** PreToolUse | **Matcher:** `Agent`
 
-Claude Code subagents **cannot access MCP tools** — this is an architectural limitation of the platform. Without this hook, every delegated agent falls back to Grep+Read, bypassing all LSP enforcement.
+A delegated subagent's tool access depends on how it's configured, and its own exploration doesn't share this session's LSP navigation history. Without pre-resolved context, a subagent easily falls back to exploratory Grep+Read, burning tokens and bypassing enforcement for its own turn. This hook forces the orchestrator to resolve symbol locations via `LSP` first and hand them to the subagent directly.
 
 ```
 // BLOCKED — no LSP context
@@ -349,13 +379,13 @@ Agent({
 | Standard | Implementation agents, worktree-isolated agents | BLOCK during implement phase |
 | Exempt | Reviewers, testers, planners, auditors | Never enforced (read-only) |
 
-### 6. `lsp-session-reset.js` — Stale State Wiper
+### 7. `lsp-session-reset.js` — Stale State Wiper
 
 **Hook type:** SessionStart | **Matcher:** `true` (runs on every session start)
 
 The Read guard's state file (`~/.claude/state/lsp-ready-<cwd-hash>`) has a 24-hour expiry. Without this hook, a new session inherits yesterday's `nav_count` — and if that count was ≥ 2, the guard is permanently in **surgical mode** for today's session: unlimited Reads with zero LSP calls required. A full bypass of the enforcement chain.
 
-This hook runs once on session start and deletes the state file for the current cwd. The next Read triggers Gate 1 (warmup required), forcing at least one `get_diagnostics` call before any code file can be opened. After warmup, the standard progression kicks in (Gate 2 → 3 → 4 → 5) requiring real LSP navigation calls before surgical mode unlocks.
+This hook runs once on session start and deletes the state file for the current cwd. The next Read triggers Gate 1 (warmup required), forcing at least one `LSP documentSymbol` call before any code file can be opened. After warmup, the standard progression kicks in (Gate 2 → 3 → 4 → 5) requiring real LSP navigation calls before surgical mode unlocks.
 
 **Session lifecycle with reset:**
 ```
@@ -365,7 +395,7 @@ Session start
   │
   ├─ Read(page.tsx) → Gate 1 BLOCKS → "warmup required"
   │
-  ├─ get_diagnostics(file.ts) → tracker writes warmup_done=true
+  ├─ LSP documentSymbol(file.ts) → tracker writes warmup_done=true
   │
   ├─ Read × 2 (free) → Gate 3 warn → Gate 4 block → LSP nav → …
   │
@@ -374,11 +404,11 @@ Session start
 
 **Safety:** the hook only deletes the flag for the current cwd — other projects' state files are left alone. Failure is silent (never blocks session start).
 
-### 7. `lsp-usage-tracker.js` — State Tracker
+### 8. `lsp-usage-tracker.js` — State Tracker
 
-**Hook type:** PostToolUse | **Matcher:** all `mcp__cclsp__*` tools
+**Hook type:** PostToolUse | **Matcher:** `LSP`
 
-Tracks successful LSP calls in a per-project state file. Other hooks read this state to make gate decisions.
+Tracks successful native `LSP` tool calls in a per-project state file. Other hooks read this state to make gate decisions. An errored `LSP` call (checked generically — error flags, error-shaped text, an empty result object) doesn't count.
 
 **State file:** `~/.claude/state/lsp-ready-<md5-hash-of-cwd>`
 
@@ -390,11 +420,9 @@ Tracks successful LSP calls in a per-project state file. Other hooks read this s
   "read_count": 38,
   "read_files": ["src/page.tsx", "src/actions.ts"],
   "timestamp": 1775818285727,
-  "last_tool": "mcp__cclsp__find_references"
+  "last_tool": "LSP"
 }
 ```
-
-**Cold start handling:** Detects the cclsp "No Project" error (upstream bug where `find_workspace_symbols` doesn't prime the TypeScript project). Emits a `systemMessage` with the correct fix — call a file-based tool first. It's an ordering bug, not a timing issue.
 
 ## 📦 Installation
 
@@ -412,13 +440,13 @@ Run bash install.sh in this repo to set up LSP enforcement hooks.
 ```
 
 The install script:
-- Copies 7 hooks + shared `lib/detect-lsp-provider.js` helper to `~/.claude/hooks/`
+- Copies 8 hooks + shared `lib/lsp-suggestions.js` helper to `~/.claude/hooks/`
 - Copies the LSP-first rule to `~/.claude/rules/`
 - **Merges** hook registrations into your existing `~/.claude/settings.json` (won't overwrite your other hooks)
-- Enables the built-in `typescript-lsp` plugin
+- Enables the built-in `typescript-lsp` plugin (wires up Claude Code's native LSP client for TS/JS — not an MCP server)
 - Creates `~/.claude/state/` for tracking
 - Verifies everything at the end
-- Safe to re-run: entries are deduped by command path, so upgrading from v1/v2.0 to v2.1 just adds what's missing without touching anything else
+- Safe to re-run: entries are deduped by command path, and an older install's `PostToolUse` tracker matcher (if it still names `mcp__cclsp__*` tools) is migrated to `LSP` in place
 
 ### Option 2: Run the script yourself
 
@@ -442,11 +470,11 @@ Output:
 === LSP Enforcement Kit — Install ===
 
 [1/4] Directories ready
-[2/4] Copied 7 hooks + lib + 1 rule
+[2/4] Copied 8 hooks + lib + 1 rule
 [3/4] settings.json updated (merged, not overwritten)
 [4/4] Verifying...
 
-  Hooks installed:  7/7
+  Hooks installed:  8/8
   Rule installed:   yes
   Plugin enabled:   yes
   State directory:  yes
@@ -467,8 +495,9 @@ Done. Restart Claude Code to activate.
 #### Step 1: Copy files
 
 ```bash
-mkdir -p ~/.claude/hooks ~/.claude/state ~/.claude/rules
+mkdir -p ~/.claude/hooks/lib ~/.claude/state ~/.claude/rules
 cp hooks/*.js ~/.claude/hooks/
+cp hooks/lib/*.js ~/.claude/hooks/lib/
 cp rules/lsp-first.md ~/.claude/rules/
 ```
 
@@ -504,6 +533,10 @@ Add to `PreToolUse` array:
   "hooks": [{ "type": "command", "command": "node ~/.claude/hooks/bash-grep-block.js" }]
 },
 {
+  "matcher": "Bash",
+  "hooks": [{ "type": "command", "command": "node ~/.claude/hooks/bash-code-view-block.js" }]
+},
+{
   "matcher": "Read",
   "hooks": [{ "type": "command", "command": "node ~/.claude/hooks/lsp-first-read-guard.js" }]
 },
@@ -517,7 +550,7 @@ Add to `PostToolUse` array:
 
 ```json
 {
-  "matcher": "mcp__cclsp__find_definition|mcp__cclsp__find_references|mcp__cclsp__find_workspace_symbols|mcp__cclsp__find_implementation|mcp__cclsp__get_hover|mcp__cclsp__get_diagnostics|mcp__cclsp__get_incoming_calls|mcp__cclsp__get_outgoing_calls",
+  "matcher": "LSP",
   "hooks": [{ "type": "command", "command": "node ~/.claude/hooks/lsp-usage-tracker.js" }]
 }
 ```
@@ -549,17 +582,16 @@ Expected output:
 LSP Enforcement Kit — Status
 ============================
 
-  Hook files:          ✓ 7/7
+  Hook files:          ✓ 8/8
   Shared lib/helper:   ✓ yes
-  Settings registered: ✓ PreToolUse(5) PostToolUse(1) SessionStart(1)
-  Detected providers:  ✓ cclsp
+  Settings registered: ✓ PreToolUse(6) PostToolUse(1) SessionStart(1)
 
 State for current cwd (/path/to/project)
 ------------------------
   Warmup done:         yes
   nav_count:           5 (LSP navigation calls)
   read_count:          7 (unique code files read)
-  Last tool:           mcp__cclsp__find_references (2min ago)
+  Last tool:           LSP (2min ago)
 
   ✓ Surgical mode active — all Reads unlimited for this session.
 
@@ -568,83 +600,36 @@ Diagnostic summary
   All checks passed. Enforcement is active.
 ```
 
-Or restart Claude Code and ask "Where is handleSubmit defined?" — Claude should use `find_definition`, not Grep.
+Or restart Claude Code and ask "Where is handleSubmit defined?" — Claude should use the `LSP` tool's `goToDefinition` operation, not Grep.
 
 ## 📚 LSP Tool Reference
 
-| Tool | Question It Answers | Output |
-|------|-------------------|--------|
-| `find_definition` | Where is X defined? | file:line of definition |
-| `find_references` | Where is X used? | All file:line usages |
-| `find_workspace_symbols` | Find anything named X | All matching symbols in project |
-| `find_implementation` | What implements this interface? | Concrete implementations |
-| `get_incoming_calls` | What calls X? | All callers with file:line |
-| `get_outgoing_calls` | What does X call? | All callees with file:line |
-| `get_hover` | What type is X? | Type signature + docs |
-| `get_diagnostics` | Any errors in this file? | TypeScript errors/warnings |
+All of these are `operation` values on Claude Code's single built-in `LSP` tool — not separate tools, and not MCP calls.
 
-## 🐍 Optional: Python, Go, Rust Support
+| Operation | Question It Answers | Output |
+|-----------|-------------------|--------|
+| `goToDefinition` | Where is X defined? | file:line of definition |
+| `findReferences` | Where is X used? | All file:line usages |
+| `workspaceSymbol` | Find anything named X | All matching symbols in project (requires a `query`) |
+| `goToImplementation` | What implements this interface? | Concrete implementations |
+| `prepareCallHierarchy` + `incomingCalls` | What calls X? | All callers with file:line |
+| `prepareCallHierarchy` + `outgoingCalls` | What does X call? | All callees with file:line |
+| `hover` | What type is X? | Type signature + docs |
+| `documentSymbol` | What's in this file? | All symbols in the file (also used as the warmup call) |
 
-The built-in plugin only covers TypeScript/JavaScript. For other languages, install `cclsp` — a standalone MCP server that connects Claude Code to any Language Server:
+## 🐍 Other Languages (Python, Go, Rust, …)
 
-```bash
-npm install -g cclsp
-```
+This kit doesn't bundle or require any language server itself — it only enforces *using* the `LSP` tool, whatever language server Claude Code has wired up behind it. `install.sh` enables the `typescript-lsp` plugin, which covers TypeScript/JavaScript out of the box.
 
-Then install the language server for your language:
-
-```bash
-# Python
-pip install python-lsp-server
-
-# Go
-go install golang.org/x/tools/gopls@latest
-
-# Rust
-rustup component add rust-analyzer
-```
-
-Create `~/.config/claude/cclsp.json`:
-
-```json
-{
-  "servers": [
-    {
-      "extensions": ["py", "pyi"],
-      "command": ["pylsp"]
-    },
-    {
-      "extensions": ["go"],
-      "command": ["gopls", "serve"]
-    },
-    {
-      "extensions": ["rs"],
-      "command": ["rust-analyzer"]
-    }
-  ]
-}
-```
-
-Add to your Claude Code MCP config (`~/.claude.json`):
-
-```json
-{
-  "mcpServers": {
-    "cclsp": {
-      "type": "stdio",
-      "command": "cclsp",
-      "args": []
-    }
-  }
-}
-```
-
-The hooks work identically — they detect code symbols by naming convention, not by language. Once `cclsp` is connected, `find_definition`, `find_references`, etc. work across all configured languages.
+For another language, you need Claude Code itself to have a language server configured for it (not an MCP server — this kit's hooks and suggestions won't route through one). Check Claude Code's own documentation/settings for wiring up additional language servers (e.g. `gopls` for Go, `pylsp`/`pyright` for Python, `rust-analyzer` for Rust). Once that's configured, the `LSP` tool's `operation`s work the same way for that language — this kit's hooks detect code symbols by naming convention (PascalCase, camelCase, snake_case), not by language, so nothing here needs to change.
 
 ## ❓ FAQ
 
+**Q: Why no MCP server (cclsp, Serena, …) at all?**
+Earlier versions suggested cclsp/Serena and detected which one you had installed. That's gone: Claude Code exposes LSP navigation as a native, built-in `LSP` tool — there's nothing to install, connect, or pick between. Real-session auditing found agents using this native tool successfully well before any MCP server was ever configured, and a stale "no LSP MCP server detected — install cclsp or Serena" suggestion is actively harmful — it tells the agent to go install something when a working tool is already sitting right there. If your Claude Code version predates the native `LSP` tool, this kit isn't the right fit; it won't fall back to suggesting an MCP server instead.
+
 **Q: Does this work with Python/Go/Rust?**
-Out of the box — TypeScript/JavaScript only (built-in plugin). For other languages, install `cclsp` + the language server (see section above). The hooks themselves are language-agnostic.
+Depends on whether Claude Code has a language server wired up for that language — see "Other Languages" above. This kit enables the `typescript-lsp` plugin (native, not MCP) for TS/JS; other languages need Claude Code's own equivalent configured. The hooks themselves detect symbols by naming convention, not language, so nothing here changes once that's set up.
 
 **Q: What if LSP gives wrong results?**
 The hooks don't eliminate Grep — they block Grep for *code symbols*. If LSP returns empty, Claude can still Grep with non-symbol patterns or search non-code files. The Read guard also gives 2 free reads before requiring navigation.
@@ -653,25 +638,13 @@ The hooks don't eliminate Grep — they block Grep for *code symbols*. If LSP re
 After 2 LSP navigation calls, all gates open permanently (surgical mode). This happens within the first 30 seconds of a session. Non-code files (config, tests, docs) are never gated.
 
 **Q: Why block Agent delegation without LSP context?**
-Claude Code subagents cannot access MCP tools (architectural limitation). Without pre-resolved context, every delegated agent falls back to exploratory Grep+Read, burning thousands of tokens and bypassing all enforcement.
+A delegated subagent's tool access and context are its own — without pre-resolved symbol locations, it tends to fall back to exploratory Grep+Read, burning tokens and bypassing enforcement for its own turn. This hook forces the orchestrator to resolve locations via `LSP` first and hand them over directly.
 
-**Q: Known issues?**
-`find_workspace_symbols` fails with "No Project" if called before any file-based LSP tool (cclsp upstream bug). The tracker detects this and tells Claude to call `get_diagnostics` first. Not a timing issue — ordering issue.
+**Q: What's the `bash-code-view-block.js` hook about — isn't `bash-grep-block.js` enough?**
+No — they catch different things. `bash-grep-block.js` catches *searching* for a symbol via Bash (grep/rg/ag/ack, or regex-address sed/awk). `bash-code-view-block.js` catches *viewing* a code file's content via Bash with no symbol target at all — `sed -n 'N,Mp' file.go`, `awk '{print NR": "$0}' file.go`, bare `cat file.go`, `git show <ref>:<path>` — none of which contain a symbol pattern, so the search hook never sees them. Both were real bypass patterns found by auditing actual sessions: neither ever triggered any hook before these were added, so a `Read`'s free-read/nav-count gate could be routed around entirely just by using a different shell command to view the same content. `git diff`/`git log -p`/`git show <ref>` (no colon) stay exempt — reviewing a diff or commit history isn't the same as reading the file's current content cold.
 
-**Q: I installed v1 and shared it with my team — should I upgrade?**
-Yes. v1 had two silent bypass routes (Glob symbol search and stale session state) that let Claude navigate code without ever calling LSP. Both are closed in v2. Just re-run `bash install.sh` — it's idempotent and only adds the missing hook entries to your `settings.json`. No existing configuration is touched.
-
-**Q: Does this work with Serena?**
-Yes. Since **v2.1**, the kit detects your LSP MCP provider and tailors its block-message suggestions. If you run [Serena](https://github.com/oraios/serena) (the multi-language MCP symbol toolkit by Oraios AI — MIT), the hooks will point you at `mcp__serena__find_symbol`, `find_referencing_symbols`, and `get_symbols_overview` instead of cclsp tools. The enforcement logic (Grep/Glob/Read/Agent gates, session reset) is provider-agnostic — it works the same for both. You can also run cclsp and Serena side-by-side; suggestions then show both.
-
-This is pure interop — the kit ships no Serena code, uses only their public tool names in suggestion strings, and reads only your own config to detect which provider is active.
-
-**Q: What about Python/Go/Rust? cclsp is TypeScript-only.**
-Two options:
-1. Install a standalone `cclsp` MCP server with multi-language config (see the "Optional" section above), OR
-2. Install [Serena](https://github.com/oraios/serena) — it bundles `solidlsp`, a unified wrapper around language servers for Python, Go, Rust, Java, TypeScript, Vue, PHP, Ruby, Swift, Elixir, Clojure, Bash, PowerShell, and more. The kit will detect Serena automatically and adapt its suggestions.
-
-The hook detection logic itself is language-agnostic — it works on naming conventions (PascalCase, camelCase, snake_case), not language-specific ASTs.
+**Q: I installed an older version and shared it with my team — should I upgrade?**
+Yes. Besides earlier fixes (Glob symbol search, stale session state), this version removes MCP suggestions entirely and closes the two Bash bypass gaps above. Just re-run `bash install.sh` — it's idempotent, adds only the missing hook entries, and migrates an old `PostToolUse` tracker matcher (if it still names `mcp__cclsp__*` tools) to `LSP` in place. No other existing configuration is touched.
 
 ## 📄 License
 
