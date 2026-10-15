@@ -26,10 +26,23 @@ const ALLOW_CONFIG_PATTERNS = /(\.config\.|tsconfig|next\.config|vite\.config|we
 const ALLOW_PATH_PATTERNS = /(^|\/)(\.task|\.claude|\.git|node_modules|build|dist|out|public|scripts|docs?|knowledge-vault|supabase\/migrations|coverage|\.next|\.turbo|__tests__|__mocks__)(\/|$)/i;
 const ALLOW_TEST_PATTERNS = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py)$/i;
 
+// Gate thresholds. Override per machine with LSP_FIRST_FREE_READS,
+// LSP_FIRST_WARN_AT and LSP_FIRST_REQUIRE_NAV_2_AT (positive integers).
+// Defaults leave room for a 2-3 file task (a component, its test, its
+// index) to finish without LSP navigation, while a wider exploration still
+// hits Gate 4/5.
+function envInt(name, fallback) {
+  const n = parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
 const FLAG_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const FREE_READS = 2;
-const WARN_AT = 3;
-const REQUIRE_NAV_2_AT = 6;
+const FREE_READS = envInt('LSP_FIRST_FREE_READS', 3);
+const WARN_AT = envInt('LSP_FIRST_WARN_AT', FREE_READS + 1);
+const REQUIRE_NAV_2_AT = envInt('LSP_FIRST_REQUIRE_NAV_2_AT', 8);
+// A Read bounded to this many lines is a surgical view (the shape LSP
+// navigation produces) and skips Gates 4/5 without counting as a free Read.
+const SURGICAL_READ_MAX_LINES = 200;
 
 function getFlagPath() {
   const cwd = process.cwd();
@@ -92,6 +105,11 @@ process.stdin.on('end', () => {
     );
   }
 
+  // Bounded Read (explicit small `limit`): surgical, so past warmup it
+  // bypasses the count-based gates.
+  const limit = Number(data.tool_input?.limit);
+  if (Number.isFinite(limit) && limit > 0 && limit <= SURGICAL_READ_MAX_LINES) process.exit(0);
+
   const readFiles = Array.isArray(flag.read_files) ? flag.read_files : [];
   const navCount = flag.nav_count || 0;
   const alreadyRead = readFiles.includes(filePath);
@@ -136,7 +154,7 @@ process.stdin.on('end', () => {
     emitBlock(
       `⛔ LSP-FIRST BLOCK (Gate 4 — LSP Navigation Required)\n\n` +
       `Read #${nextReadNum} requires at least 1 LSP navigation call.\n` +
-      `After 1 nav call, Reads 4-5 unlock. After 2, unlimited.\n` +
+      `After 1 nav call, Reads ${WARN_AT + 1}-${REQUIRE_NAV_2_AT - 1} unlock. After 2, unlimited.\n` +
       buildConcreteCall(filePath) +
       `\nBlocked: ${filePath}\n`
     );
